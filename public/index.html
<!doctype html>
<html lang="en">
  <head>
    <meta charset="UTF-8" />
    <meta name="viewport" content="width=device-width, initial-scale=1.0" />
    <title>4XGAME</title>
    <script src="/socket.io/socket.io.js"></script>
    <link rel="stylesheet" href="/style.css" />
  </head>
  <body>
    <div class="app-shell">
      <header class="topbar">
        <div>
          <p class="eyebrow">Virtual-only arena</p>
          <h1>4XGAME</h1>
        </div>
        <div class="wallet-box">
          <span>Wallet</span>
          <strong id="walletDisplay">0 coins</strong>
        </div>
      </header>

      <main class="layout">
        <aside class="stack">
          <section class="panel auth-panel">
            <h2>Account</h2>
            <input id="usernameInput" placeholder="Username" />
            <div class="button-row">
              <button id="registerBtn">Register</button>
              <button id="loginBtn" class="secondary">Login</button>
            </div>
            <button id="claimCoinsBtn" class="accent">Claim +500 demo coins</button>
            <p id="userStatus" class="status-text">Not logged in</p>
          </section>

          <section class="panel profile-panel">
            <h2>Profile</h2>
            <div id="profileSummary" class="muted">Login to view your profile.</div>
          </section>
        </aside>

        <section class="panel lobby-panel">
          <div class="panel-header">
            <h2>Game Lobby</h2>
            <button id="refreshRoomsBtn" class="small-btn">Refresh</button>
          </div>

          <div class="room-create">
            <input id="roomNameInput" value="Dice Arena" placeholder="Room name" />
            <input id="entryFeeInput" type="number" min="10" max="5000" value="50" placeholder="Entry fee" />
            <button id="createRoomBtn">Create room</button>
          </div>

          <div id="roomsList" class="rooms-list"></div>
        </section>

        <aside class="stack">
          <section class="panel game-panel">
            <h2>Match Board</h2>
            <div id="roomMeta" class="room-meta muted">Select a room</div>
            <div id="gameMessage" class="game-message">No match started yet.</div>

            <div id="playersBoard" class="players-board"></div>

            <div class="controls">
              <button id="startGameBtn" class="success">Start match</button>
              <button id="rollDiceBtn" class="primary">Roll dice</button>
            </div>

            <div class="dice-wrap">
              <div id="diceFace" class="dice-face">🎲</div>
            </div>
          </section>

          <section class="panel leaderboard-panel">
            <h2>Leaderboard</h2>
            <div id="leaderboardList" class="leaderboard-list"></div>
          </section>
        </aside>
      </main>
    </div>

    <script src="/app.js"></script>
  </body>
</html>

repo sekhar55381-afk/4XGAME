@@ -1,0 +1,367 @@
+const express = require("express");
+const cors = require("cors");
+const http = require("http");
+const path = require("path");
+const { Server } = require("socket.io");
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" } });
+
+const PORT = process.env.PORT || 3000;
+const STARTING_COINS = 3000;
+const HOUSE_RATE = 0.10;
+
+const users = new Map();
+const rooms = new Map();
+const transactions = [];
+
+function uid(prefix) {
+  return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function now() {
+  return new Date().toISOString();
+}
+
+function serializeUser(user) {
+  return { id: user.id, username: user.username, coins: user.coins };
+}
+
+function serializeRoom(room) {
+  return {
+    id: room.id,
+    name: room.name,
+    entryFee: room.entryFee,
+    status: room.status,
+    hostId: room.hostId,
+    winnerId: room.winnerId,
+    targetScore: room.targetScore,
+    maxPlayers: room.maxPlayers,
+    payout: room.payout || 0,
+    players: room.players.map((player) => ({
+      id: player.id,
+      username: player.username,
+      score: player.score,
+      connected: Boolean(player.socketId)
+    })),
+    turnIndex: room.turnIndex
+  };
+}
+
+function addTransaction(userId, type, amount, note) {
+  transactions.push({
+    id: uid("txn"),
+    userId,
+    type,
+    amount,
+    note,
+    createdAt: now()
+  });
+}
+
+function emitLobby() {
+  io.emit("lobby:update", [...rooms.values()].map(serializeRoom));
+}
+
+function getUserById(userId) {
+  return users.get(String(userId));
+}
+
+function getUserByUsername(username) {
+  const search = String(username || "").trim().toLowerCase();
+  for (const user of users.values()) {
+    if (user.username.toLowerCase() === search) return user;
+  }
+  return null;
+}
+
+function getProfileSummary(userId) {
+  const user = getUserById(userId);
+  if (!user) return null;
+
+  const userTransactions = transactions.filter((tx) => tx.userId === userId);
+  const rewards = userTransactions.filter((tx) => tx.amount > 0).reduce((sum, tx) => sum + tx.amount, 0);
+  const spends = Math.abs(userTransactions.filter((tx) => tx.amount < 0).reduce((sum, tx) => sum + tx.amount, 0));
+  const wins = userTransactions.filter((tx) => tx.note && tx.note.toLowerCase().includes("won")).length;
+
+  return {
+    user: serializeUser(user),
+    stats: {
+      totalRewards: rewards,
+      totalSpent: spends,
+      wins,
+      transactions: userTransactions.length
+    }
+  };
+}
+
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, "public")));
+
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true, mode: "virtual-coins-only" });
+});
+
+app.get("/api/users/:userId", (req, res) => {
+  const user = getUserById(req.params.userId);
+  if (!user) return res.status(404).json({ error: "User not found" });
+  res.json({ user: serializeUser(user) });
+});
+
+app.get("/api/users/:userId/profile", (req, res) => {
+  const summary = getProfileSummary(req.params.userId);
+  if (!summary) return res.status(404).json({ error: "User not found" });
+  res.json(summary);
+});
+
+app.get("/api/users/:userId/transactions", (req, res) => {
+  if (!getUserById(req.params.userId)) return res.status(404).json({ error: "User not found" });
+  const list = transactions.filter((tx) => tx.userId === req.params.userId).slice(-10).reverse();
+  res.json({ transactions: list });
+});
+
+app.get("/api/leaderboard", (_req, res) => {
+  const board = [...users.values()]
+    .map((user) => ({
+      id: user.id,
+      username: user.username,
+      coins: user.coins,
+      wins: transactions.filter((tx) => tx.userId === user.id && tx.note && tx.note.toLowerCase().includes("won")).length
+    }))
+    .sort((a, b) => b.coins - a.coins)
+    .slice(0, 10);
+  res.json({ leaderboard: board });
+});
+
+app.get("/api/rooms", (_req, res) => {
+  res.json({ rooms: [...rooms.values()].map(serializeRoom) });
+});
+
+app.post("/api/register", (req, res) => {
+  const username = String(req.body?.username || "").trim();
+  if (username.length < 3 || username.length > 20) {
+    return res.status(400).json({ error: "Username must be 3-20 chars" });
+  }
+  if (getUserByUsername(username)) {
+    return res.status(409).json({ error: "Username already exists" });
+  }
+
+  const user = { id: uid("user"), username, coins: STARTING_COINS };
+  users.set(user.id, user);
+  addTransaction(user.id, "bonus", STARTING_COINS, "Welcome virtual coins");
+
+  res.status(201).json({ user: serializeUser(user) });
+});
+
+app.post("/api/login", (req, res) => {
+  const username = String(req.body?.username || "").trim();
+  const user = getUserByUsername(username);
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+  res.json({ user: serializeUser(user) });
+});
+
+app.post("/api/wallet/claim-demo-coins", (req, res) => {
+  const user = getUserById(req.body?.userId);
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  const amount = 500;
+  user.coins += amount;
+  addTransaction(user.id, "credit", amount, "Demo coin bonus");
+  res.json({ user: serializeUser(user) });
+});
+
+app.get("*", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+io.on("connection", (socket) => {
+  socket.on("register", ({ username }) => {
+    const cleanName = String(username || "").trim();
+    if (cleanName.length < 3 || cleanName.length > 20) {
+      return socket.emit("auth:error", { message: "Username must be 3-20 chars" });
+    }
+    if (getUserByUsername(cleanName)) {
+      return socket.emit("auth:error", { message: "Username already exists" });
+    }
+
+    const user = { id: uid("user"), username: cleanName, coins: STARTING_COINS };
+    users.set(user.id, user);
+    addTransaction(user.id, "bonus", STARTING_COINS, "Welcome virtual coins");
+    socket.emit("auth:success", { user: serializeUser(user) });
+    emitLobby();
+  });
+
+  socket.on("login", ({ username }) => {
+    const cleanName = String(username || "").trim();
+    const user = getUserByUsername(cleanName);
+    if (!user) {
+      return socket.emit("auth:error", { message: "User not found" });
+    }
+    socket.emit("auth:success", { user: serializeUser(user) });
+  });
+
+  socket.on("set-user", ({ userId }) => {
+    socket.userId = userId;
+  });
+
+  socket.on("create-room", ({ name, entryFee }) => {
+    const user = users.get(socket.userId);
+    if (!user) return socket.emit("room:error", { message: "Please login first" });
+
+    const roomName = String(name || "Dice Arena").trim() || "Dice Arena";
+    const fee = Number(entryFee || 20);
+    if (!Number.isFinite(fee) || fee < 10 || fee > 5000) {
+      return socket.emit("room:error", { message: "Entry fee must be between 10 and 5000 coins" });
+    }
+    if (user.coins < fee) {
+      return socket.emit("room:error", { message: "Not enough virtual coins" });
+    }
+
+    const room = {
+      id: uid("room"),
+      name: roomName.slice(0, 40),
+      entryFee: fee,
+      status: "waiting",
+      hostId: user.id,
+      winnerId: null,
+      payout: 0,
+      targetScore: 30,
+      maxPlayers: 4,
+      createdAt: now(),
+      players: [{ id: user.id, username: user.username, score: 0, socketId: socket.id }],
+      turnIndex: 0,
+      lastRoll: null
+    };
+
+    user.coins -= fee;
+    addTransaction(user.id, "stake", -fee, `Created ${room.name}`);
+    rooms.set(room.id, room);
+    socket.join(room.id);
+    io.to(room.id).emit("room:update", serializeRoom(room));
+    emitLobby();
+  });
+
+  socket.on("join-room", ({ roomId }) => {
+    const user = users.get(socket.userId);
+    const room = rooms.get(roomId);
+
+    if (!user) return socket.emit("room:error", { message: "Please login first" });
+    if (!room) return socket.emit("room:error", { message: "Room not found" });
+    if (room.status !== "waiting") return socket.emit("room:error", { message: "This room is no longer accepting players" });
+    if (room.players.some((player) => player.id === user.id)) {
+      return socket.emit("room:error", { message: "You already joined this room" });
+    }
+    if (room.players.length >= room.maxPlayers) {
+      return socket.emit("room:error", { message: "Room is full" });
+    }
+    if (user.coins < room.entryFee) {
+      return socket.emit("room:error", { message: "Not enough virtual coins" });
+    }
+
+    user.coins -= room.entryFee;
+    addTransaction(user.id, "stake", -room.entryFee, `Joined ${room.name}`);
+    room.players.push({ id: user.id, username: user.username, score: 0, socketId: socket.id });
+    socket.join(room.id);
+    io.to(room.id).emit("room:update", serializeRoom(room));
+    emitLobby();
+  });
+
+  socket.on("start-game", ({ roomId }) => {
+    const room = rooms.get(roomId);
+    const user = users.get(socket.userId);
+    if (!user) return socket.emit("room:error", { message: "Please login first" });
+    if (!room) return socket.emit("room:error", { message: "Room not found" });
+    if (room.hostId !== user.id) return socket.emit("room:error", { message: "Only the host can start" });
+    if (room.players.length < 2) return socket.emit("room:error", { message: "Need at least 2 players" });
+
+    room.status = "playing";
+    room.turnIndex = 0;
+    room.winnerId = null;
+    room.payout = 0;
+    room.lastRoll = null;
+    room.players.forEach((player) => { player.score = 0; });
+
+    io.to(room.id).emit("game:update", {
+      room: serializeRoom(room),
+      onTurn: room.players[room.turnIndex]?.id,
+      message: `${room.players[0].username} starts the game.`
+    });
+    io.to(room.id).emit("room:update", serializeRoom(room));
+    emitLobby();
+  });
+
+  socket.on("roll-dice", ({ roomId }) => {
+    const room = rooms.get(roomId);
+    const user = users.get(socket.userId);
+    if (!user) return socket.emit("room:error", { message: "Please login first" });
+    if (!room) return socket.emit("room:error", { message: "Room not found" });
+    if (room.status !== "playing") return socket.emit("room:error", { message: "Game is not active" });
+
+    const currentPlayer = room.players[room.turnIndex];
+    if (!currentPlayer || currentPlayer.id !== user.id) {
+      return socket.emit("room:error", { message: "It is not your turn" });
+    }
+
+    const roll = Math.floor(Math.random() * 6) + 1;
+    currentPlayer.score += roll;
+    room.lastRoll = { userId: currentPlayer.id, username: currentPlayer.username, roll, total: currentPlayer.score };
+
+    if (currentPlayer.score >= room.targetScore) {
+      room.status = "finished";
+      room.winnerId = currentPlayer.id;
+      const pool = room.players.length * room.entryFee;
+      const payout = Math.floor(pool - pool * HOUSE_RATE);
+      room.payout = payout;
+
+      const winner = users.get(currentPlayer.id);
+      if (winner) {
+        winner.coins += payout;
+        addTransaction(winner.id, "reward", payout, `Won ${room.name}`);
+      }
+
+      io.to(room.id).emit("game:update", {
+        room: serializeRoom(room),
+        winner: currentPlayer.username,
+        payout,
+        lastRoll: room.lastRoll,
+        message: `${currentPlayer.username} wins the match and earns ${payout} virtual coins.`
+      });
+      io.to(room.id).emit("room:update", serializeRoom(room));
+      emitLobby();
+      return;
+    }
+
+    room.turnIndex = (room.turnIndex + 1) % room.players.length;
+    io.to(room.id).emit("game:update", {
+      room: serializeRoom(room),
+      onTurn: room.players[room.turnIndex]?.id,
+      lastRoll: room.lastRoll,
+      message: `${currentPlayer.username} rolled ${roll}. Next turn: ${room.players[room.turnIndex]?.username}.`
+    });
+    io.to(room.id).emit("room:update", serializeRoom(room));
+  });
+
+  socket.on("disconnect", () => {
+    if (!socket.userId) return;
+    for (const room of rooms.values()) {
+      const index = room.players.findIndex((player) => player.id === socket.userId);
+      if (index >= 0) {
+        room.players.splice(index, 1);
+        if (room.players.length === 0) {
+          rooms.delete(room.id);
+        } else if (room.status === "playing" && room.turnIndex >= room.players.length) {
+          room.turnIndex = 0;
+        }
+      }
+    }
+    emitLobby();
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`4XGAME server running at http://localhost:${PORT}`);
+});
