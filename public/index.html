@@ -1,33 +1,325 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>4XGAME — Virtual Arena</title>
-  <style>
-    :root{font-family:Inter,system-ui,sans-serif;color:#e5e7eb;background:#0b1120}*{box-sizing:border-box}body{margin:0}.shell{max-width:1050px;margin:auto;padding:24px}.hero{background:linear-gradient(135deg,#1d4ed8,#7c3aed);padding:28px;border-radius:20px;margin-bottom:18px}.hero h1{margin:0 0 6px}.notice{color:#fde68a;font-size:14px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}.card{background:#111827;border:1px solid #263244;border-radius:16px;padding:18px;margin-bottom:16px}input,button{width:100%;padding:11px;border-radius:9px;border:1px solid #475569;margin:6px 0;font:inherit}input{background:#e5e7eb;color:#111827}button{background:#2563eb;color:white;border:0;cursor:pointer;font-weight:700}button:disabled{opacity:.5;cursor:not-allowed}.muted{color:#94a3b8}.match{border-top:1px solid #334155;padding:12px 0}.stats{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}.pill{background:#1e293b;padding:7px 10px;border-radius:999px}.danger{color:#fca5a5}.success{color:#86efac}#message{min-height:22px;margin:10px 0}
-  </style>
-</head>
-<body><main class="shell">
-  <section class="hero"><h1>🎮 4XGAME</h1><div>Multiplayer virtual-coin game arena</div><div class="notice">Demo mode only: virtual coins have no cash value. No deposits or withdrawals are supported.</div></section>
-  <div id="message"></div>
-  <section class="grid">
-    <div class="card"><h2>Account</h2><input id="username" placeholder="Username (3-24 chars)"><button id="register">Create account</button><button id="login">Login</button><p id="account" class="muted">Not logged in</p></div>
-    <div class="card"><h2>Virtual wallet</h2><div class="stats"><span class="pill">Coins: <b id="coins">0</b></span><span class="pill">Player: <b id="player">—</b></span></div><button id="claim">Claim demo coins (+500)</button><p class="muted">Coins are for testing only and cannot be converted to money.</p></div>
-  </section>
-  <section class="card"><h2>Create a match</h2><div class="grid"><input id="title" value="Ludo Arena" placeholder="Match title"><input id="fee" type="number" min="10" value="50" placeholder="Entry coins"></div><button id="create">Create room</button></section>
-  <section class="card"><div class="stats"><h2>Match lobby</h2><button id="refresh" style="max-width:180px">Refresh</button></div><div id="matches" class="muted">Loading…</div></section>
-  <section class="card"><h2>Demo result tool</h2><p class="muted">For local testing only. In production, results must come from server-authoritative game logic.</p><input id="matchId" placeholder="Match ID"><input id="winnerId" placeholder="Winner user ID"><button id="resolve">Resolve demo match</button></section>
-</main><script>
-let me=null;const $=id=>document.getElementById(id);const msg=(text,bad=false)=>{$('message').textContent=text;$('message').className=bad?'danger':'success'};
-async function api(url,options={}){const r=await fetch(url,{headers:{'Content-Type':'application/json'},...options});const data=await r.json();if(!r.ok)throw Error(data.error||'Request failed');return data}
-function renderUser(){ $('player').textContent=me?.username||'—';$('coins').textContent=me?.coins??0;$('account').textContent=me?`ID: ${me.id}`:'Not logged in'}
-async function refreshUser(){if(me){me=(await api('/api/users/'+me.id)).user;renderUser()}}
-async function load(){const {matches}=await api('/api/matches');$('matches').innerHTML=matches.length?matches.map(m=>`<div class="match"><b>${esc(m.title)}</b><div class="muted">${m.id} · ${m.entryFee} coins · ${m.players.length}/${m.maxPlayers} players · ${m.status}</div><div class="muted">Players: ${m.players.map(p=>esc(p.username)).join(', ')||'—'}</div><button data-id="${m.id}" ${!me||m.status!=='open'?'disabled':''}>Join</button></div>`).join(''):'No matches yet.';document.querySelectorAll('[data-id]').forEach(b=>b.onclick=async()=>{try{const d=await api('/api/matches/'+b.dataset.id+'/join',{method:'POST',body:JSON.stringify({userId:me.id})});me=d.user;renderUser();msg('Joined match');load()}catch(e){msg(e.message,true)}})}
-const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-$('register').onclick=async()=>{try{const d=await api('/api/register',{method:'POST',body:JSON.stringify({username:$('username').value})});me=d.user;renderUser();msg('Account created')}catch(e){msg(e.message,true)}};
-$('login').onclick=async()=>{try{const d=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('username').value})});me=d.user;renderUser();msg('Logged in');load()}catch(e){msg(e.message,true)}};
-$('claim').onclick=async()=>{if(!me)return msg('Login first',true);try{me=(await api('/api/wallet/claim-demo-coins',{method:'POST',body:JSON.stringify({userId:me.id})})).user;renderUser();msg('Virtual coins added')}catch(e){msg(e.message,true)}};
-$('create').onclick=async()=>{if(!me)return msg('Login first',true);try{const d=await api('/api/matches',{method:'POST',body:JSON.stringify({userId:me.id,title:$('title').value,entryFee:Number($('fee').value)})});me=d.user;renderUser();msg('Match created');load()}catch(e){msg(e.message,true)}};
-$('refresh').onclick=load;$('resolve').onclick=async()=>{try{const d=await api('/api/matches/'+$('matchId').value+'/demo-result',{method:'POST',body:JSON.stringify({winnerId:$('winnerId').value})});msg('Demo match resolved; winner received virtual coins');if(me?.id===d.user.id){me=d.user;renderUser()}load()}catch(e){msg(e.message,true)}};renderUser();load();
-</script></body></html>
+const express = require("express");
+const cors = require("cors");
+const http = require("http");
+const path = require("path");
+const { Server } = require("socket.io");
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" } });
+
+const PORT = process.env.PORT || 3000;
+const STARTING_COINS = 3000;
+const HOUSE_RATE = 0.10;
+
+const users = new Map();
+const rooms = new Map();
+const transactions = [];
+
+function uid(prefix) {
+  return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function now() {
+  return new Date().toISOString();
+}
+
+function serializeUser(user) {
+  return { id: user.id, username: user.username, coins: user.coins };
+}
+
+function serializeRoom(room) {
+  return {
+    id: room.id,
+    name: room.name,
+    entryFee: room.entryFee,
+    status: room.status,
+    hostId: room.hostId,
+    winnerId: room.winnerId,
+    targetScore: room.targetScore,
+    maxPlayers: room.maxPlayers,
+    payout: room.payout || 0,
+    players: room.players.map((player) => ({
+      id: player.id,
+      username: player.username,
+      score: player.score,
+      connected: Boolean(player.socketId)
+    }))
+  };
+}
+
+function addTransaction(userId, type, amount, note) {
+  transactions.push({
+    id: uid("txn"),
+    userId,
+    type,
+    amount,
+    note,
+    createdAt: now()
+  });
+}
+
+function emitLobby() {
+  io.emit("lobby:update", [...rooms.values()].map(serializeRoom));
+}
+
+function getUserById(userId) {
+  return users.get(String(userId));
+}
+
+function getUserByUsername(username) {
+  const search = String(username || "").trim().toLowerCase();
+  for (const user of users.values()) {
+    if (user.username.toLowerCase() === search) return user;
+  }
+  return null;
+}
+
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, "public")));
+
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true, mode: "virtual-coins-only" });
+});
+
+app.get("/api/users/:userId", (req, res) => {
+  const user = getUserById(req.params.userId);
+  if (!user) return res.status(404).json({ error: "User not found" });
+  res.json({ user: serializeUser(user) });
+});
+
+app.get("/api/rooms", (_req, res) => {
+  res.json({ rooms: [...rooms.values()].map(serializeRoom) });
+});
+
+app.post("/api/register", (req, res) => {
+  const username = String(req.body?.username || "").trim();
+  if (username.length < 3 || username.length > 20) {
+    return res.status(400).json({ error: "Username must be 3-20 chars" });
+  }
+  if (getUserByUsername(username)) {
+    return res.status(409).json({ error: "Username already exists" });
+  }
+
+  const user = { id: uid("user"), username, coins: STARTING_COINS };
+  users.set(user.id, user);
+  addTransaction(user.id, "bonus", STARTING_COINS, "Welcome virtual coins");
+
+  res.status(201).json({ user: serializeUser(user) });
+});
+
+app.post("/api/login", (req, res) => {
+  const username = String(req.body?.username || "").trim();
+  const user = getUserByUsername(username);
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+  res.json({ user: serializeUser(user) });
+});
+
+app.post("/api/wallet/claim-demo-coins", (req, res) => {
+  const user = getUserById(req.body?.userId);
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  const amount = 500;
+  user.coins += amount;
+  addTransaction(user.id, "credit", amount, "Demo coin bonus");
+  res.json({ user: serializeUser(user) });
+});
+
+app.get("*", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+io.on("connection", (socket) => {
+  socket.on("register", ({ username }) => {
+    const cleanName = String(username || "").trim();
+    if (cleanName.length < 3 || cleanName.length > 20) {
+      return socket.emit("auth:error", { message: "Username must be 3-20 chars" });
+    }
+    if (getUserByUsername(cleanName)) {
+      return socket.emit("auth:error", { message: "Username already exists" });
+    }
+
+    const user = { id: uid("user"), username: cleanName, coins: STARTING_COINS };
+    users.set(user.id, user);
+    addTransaction(user.id, "bonus", STARTING_COINS, "Welcome virtual coins");
+    socket.emit("auth:success", { user: serializeUser(user) });
+    emitLobby();
+  });
+
+  socket.on("login", ({ username }) => {
+    const cleanName = String(username || "").trim();
+    const user = getUserByUsername(cleanName);
+    if (!user) {
+      return socket.emit("auth:error", { message: "User not found" });
+    }
+    socket.emit("auth:success", { user: serializeUser(user) });
+  });
+
+  socket.on("create-room", ({ name, entryFee }) => {
+    const user = users.get(socket.userId);
+    if (!user) return socket.emit("room:error", { message: "Please login first" });
+
+    const roomName = String(name || "Dice Arena").trim() || "Dice Arena";
+    const fee = Number(entryFee || 20);
+    if (!Number.isFinite(fee) || fee < 10 || fee > 5000) {
+      return socket.emit("room:error", { message: "Entry fee must be between 10 and 5000 coins" });
+    }
+    if (user.coins < fee) {
+      return socket.emit("room:error", { message: "Not enough virtual coins" });
+    }
+
+    const room = {
+      id: uid("room"),
+      name: roomName.slice(0, 40),
+      entryFee: fee,
+      status: "waiting",
+      hostId: user.id,
+      winnerId: null,
+      payout: 0,
+      targetScore: 30,
+      maxPlayers: 4,
+      createdAt: now(),
+      players: [{ id: user.id, username: user.username, score: 0, socketId: socket.id }],
+      turnIndex: 0,
+      lastRoll: null
+    };
+
+    user.coins -= fee;
+    addTransaction(user.id, "stake", -fee, `Created ${room.name}`);
+    rooms.set(room.id, room);
+    socket.join(room.id);
+    socket.userId = user.id;
+    io.to(room.id).emit("room:update", serializeRoom(room));
+    emitLobby();
+  });
+
+  socket.on("join-room", ({ roomId }) => {
+    const user = users.get(socket.userId);
+    const room = rooms.get(roomId);
+
+    if (!user) return socket.emit("room:error", { message: "Please login first" });
+    if (!room) return socket.emit("room:error", { message: "Room not found" });
+    if (room.status !== "waiting") return socket.emit("room:error", { message: "This room is no longer accepting players" });
+    if (room.players.some((player) => player.id === user.id)) {
+      return socket.emit("room:error", { message: "You already joined this room" });
+    }
+    if (room.players.length >= room.maxPlayers) {
+      return socket.emit("room:error", { message: "Room is full" });
+    }
+    if (user.coins < room.entryFee) {
+      return socket.emit("room:error", { message: "Not enough virtual coins" });
+    }
+
+    user.coins -= room.entryFee;
+    addTransaction(user.id, "stake", -room.entryFee, `Joined ${room.name}`);
+    room.players.push({ id: user.id, username: user.username, score: 0, socketId: socket.id });
+    socket.join(room.id);
+    socket.userId = user.id;
+    io.to(room.id).emit("room:update", serializeRoom(room));
+    emitLobby();
+  });
+
+  socket.on("start-game", ({ roomId }) => {
+    const room = rooms.get(roomId);
+    const user = users.get(socket.userId);
+    if (!user) return socket.emit("room:error", { message: "Please login first" });
+    if (!room) return socket.emit("room:error", { message: "Room not found" });
+    if (room.hostId !== user.id) return socket.emit("room:error", { message: "Only the host can start" });
+    if (room.players.length < 2) return socket.emit("room:error", { message: "Need at least 2 players" });
+
+    room.status = "playing";
+    room.turnIndex = 0;
+    room.winnerId = null;
+    room.payout = 0;
+    room.lastRoll = null;
+    room.players.forEach((player) => {
+      player.score = 0;
+    });
+
+    io.to(room.id).emit("game:update", {
+      room: serializeRoom(room),
+      onTurn: room.players[room.turnIndex]?.id,
+      message: `${room.players[0].username} starts the game.`
+    });
+    io.to(room.id).emit("room:update", serializeRoom(room));
+    emitLobby();
+  });
+
+  socket.on("roll-dice", ({ roomId }) => {
+    const room = rooms.get(roomId);
+    const user = users.get(socket.userId);
+    if (!user) return socket.emit("room:error", { message: "Please login first" });
+    if (!room) return socket.emit("room:error", { message: "Room not found" });
+    if (room.status !== "playing") return socket.emit("room:error", { message: "Game is not active" });
+
+    const currentPlayer = room.players[room.turnIndex];
+    if (!currentPlayer || currentPlayer.id !== user.id) {
+      return socket.emit("room:error", { message: "It is not your turn" });
+    }
+
+    const roll = Math.floor(Math.random() * 6) + 1;
+    currentPlayer.score += roll;
+    room.lastRoll = { userId: currentPlayer.id, username: currentPlayer.username, roll, total: currentPlayer.score };
+
+    if (currentPlayer.score >= room.targetScore) {
+      room.status = "finished";
+      room.winnerId = currentPlayer.id;
+      const pool = room.players.length * room.entryFee;
+      const payout = Math.floor(pool - pool * HOUSE_RATE);
+      room.payout = payout;
+
+      const winner = users.get(currentPlayer.id);
+      if (winner) {
+        winner.coins += payout;
+        addTransaction(winner.id, "reward", payout, `Won ${room.name}`);
+      }
+
+      io.to(room.id).emit("game:update", {
+        room: serializeRoom(room),
+        winner: currentPlayer.username,
+        payout,
+        lastRoll: room.lastRoll,
+        message: `${currentPlayer.username} wins the match and earns ${payout} virtual coins.`
+      });
+      io.to(room.id).emit("room:update", serializeRoom(room));
+      emitLobby();
+      return;
+    }
+
+    room.turnIndex = (room.turnIndex + 1) % room.players.length;
+    io.to(room.id).emit("game:update", {
+      room: serializeRoom(room),
+      onTurn: room.players[room.turnIndex]?.id,
+      lastRoll: room.lastRoll,
+      message: `${currentPlayer.username} rolled ${roll}. Next turn: ${room.players[room.turnIndex]?.username}.`
+    });
+    io.to(room.id).emit("room:update", serializeRoom(room));
+  });
+
+  socket.on("set-user", ({ userId }) => {
+    socket.userId = userId;
+  });
+
+  socket.on("disconnect", () => {
+    if (!socket.userId) return;
+    for (const room of rooms.values()) {
+      const index = room.players.findIndex((player) => player.id === socket.userId);
+      if (index >= 0) {
+        room.players.splice(index, 1);
+        if (room.players.length === 0) {
+          rooms.delete(room.id);
+        } else if (room.status === "playing" && room.turnIndex >= room.players.length) {
+          room.turnIndex = 0;
+        }
+      }
+    }
+    emitLobby();
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`4XGAME server running at http://localhost:${PORT}`);
+});

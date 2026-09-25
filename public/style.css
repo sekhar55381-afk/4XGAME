@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>4XGAME</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/socket.io/socket.io.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Virtual-only arena</p>
+          <h1>4XGAME</h1>
+        </div>
+        <div class="wallet-box">
+          <span>Wallet</span>
+          <strong id="walletDisplay">0 coins</strong>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel auth-panel">
+          <h2>Account</h2>
+          <input id="usernameInput" placeholder="Username" />
+          <div class="button-row">
+            <button id="registerBtn">Register</button>
+            <button id="loginBtn" class="secondary">Login</button>
+          </div>
+          <button id="claimCoinsBtn" class="accent">Claim +500 demo coins</button>
+          <p id="userStatus" class="status-text">Not logged in</p>
+        </section>
+
+        <section class="panel lobby-panel">
+          <div class="panel-header">
+            <h2>Game Lobby</h2>
+            <button id="refreshRoomsBtn" class="small-btn">Refresh</button>
+          </div>
+
+          <div class="room-create">
+            <input id="roomNameInput" value="Dice Arena" placeholder="Room name" />
+            <input id="entryFeeInput" type="number" min="10" max="5000" value="50" placeholder="Entry fee" />
+            <button id="createRoomBtn">Create room</button>
+          </div>
+
+          <div id="roomsList" class="rooms-list"></div>
+        </section>
+
+        <section class="panel game-panel">
+          <h2>Match Board</h2>
+          <div id="roomMeta" class="room-meta muted">Select a room</div>
+          <div id="gameMessage" class="game-message">No match started yet.</div>
+
+          <div id="playersBoard" class="players-board"></div>
+
+          <div class="controls">
+            <button id="startGameBtn" class="success">Start match</button>
+            <button id="rollDiceBtn" class="primary">Roll dice</button>
+          </div>
+
+          <div class="dice-wrap">
+            <div id="diceFace" class="dice-face">🎲</div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
